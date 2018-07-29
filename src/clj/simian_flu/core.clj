@@ -1,6 +1,5 @@
 (ns simian-flu.core
-  (:require [clojure.math.combinatorics :refer [combinations]])
-  (:import (javafx.stage Stage)))
+  (:require [clojure.math.combinatorics :refer [combinations]]))
 
 ;;; TODO
 ;; [x] Implement turn and move
@@ -392,89 +391,94 @@
         (Thread/sleep agent-sleep-ms)
         ; Dead things do not behave
         (if (:alive? occupant)
-          (if (at-the-edge coord world-size)
+          ;(if (at-the-edge coord world-size)
+          ;  (dosync
+          ;    (safe-println (:id occupant) (if (= :human (:species occupant)) "human" "ape") "at the edge, farewell")
+          ;    (when (= :human (:species occupant))
+          ;      (alter alive-cnt dec)))
+          (do
+            (safe-println (:id occupant) "at" coord "alive, isa non-immune human" (and (= :human (:species occupant)) (not (:immune? occupant))))
+            (when @running
+              (send-off *agent* behave!))
             (dosync
-                (safe-println (:id occupant) (if (= :human (:species occupant)) "human" "ape") "at the edge, farewell")
-                (when (= :human (:species occupant))
-                  (alter alive-cnt dec)))
-            (do
-              (safe-println (:id occupant) "at" coord "alive, isa non-immune human" (and (= :human (:species occupant)) (not (:immune? occupant))))
-              (when @running
-                (send-off *agent* behave!))
-              (dosync
-                (let [{neighbour :occupant lab? :lab?} @next-cell
-                      action (if (and (= :human (:species occupant)) (not (:immune? occupant)))
-                               ; Humans wander and 'try' to survive, see TODOs for possible roles
-                               (do
-                                 (safe-println (:id occupant) "human action")
-                                 (safe-println (:id occupant) "lab or api ahead?" (or lab? (= :ape (:species neighbour))))
-                                 (safe-println (:id occupant) "human ahead?" (= :human (:species neighbour)))
-                                 (cond
-                                   ; The lab or an ape is ahead. Run!
-                                   (or lab? (= :ape (:species neighbour)))
-                                   (do
-                                     (safe-println (:id occupant) "isa human, lab or ape ahead, prob =" direct-exp-prob)
-                                     {:func       (apply comp [u-turn
-                                                               (contaminate #(< (rand) direct-exp-prob) death-fn)
-                                                               ])
-                                      :next-coord coord})
-
-                                   ; A human is ahead
-                                   (= :human (:species neighbour))
-                                   (let [prob (∪-prob (get-human-prob neighbour human-exp-prob)
-                                                      (get-airborne-prob world coord air-spreading-radius air-exp-prob)
-                                                      (get-indirect-prob world coord))]
-                                     (safe-println (:id occupant) "isa human, human ahead, prob =" prob)
-                                     {:func       (apply comp [(if (:contaminated? neighbour) u-turn rand-turn)
-                                                               (contaminate #(< (rand) prob) death-fn)
-                                                               ])
-                                      :next-coord coord})
-
-                                   ; No one ahead let's move
-                                   :else
-                                   (let [_ (safe-println (:id occupant) "isa human, no-one ahead")
-                                         _ (safe-println (:id occupant) "airborne-prob =" (get-airborne-prob world coord air-spreading-radius air-exp-prob))
-                                         _ (safe-println (:id occupant) "indirect-prob =" (get-indirect-prob world coord))
-                                         prob (∪-prob (get-airborne-prob world coord air-spreading-radius air-exp-prob)
-                                                      (get-indirect-prob world coord))]
-                                     (safe-println (:id occupant) "prob =" prob)
-                                     {:func       (contaminate #(< (rand) prob) death-fn)
-                                      :next-coord ahead})))
-
-                               ; Apes and immune humans just move around and never die... see TODOs
-                               (if neighbour
-                                 ; The way is shut! Turn.
+              (let [{neighbour :occupant lab? :lab?} @next-cell
+                    action (if (and (= :human (:species occupant)) (not (:immune? occupant)))
+                             ; Humans wander and 'try' to survive, see TODOs for possible roles
+                             (do
+                               (safe-println (:id occupant) "human action")
+                               (safe-println (:id occupant) "lab or api ahead?" (or lab? (= :ape (:species neighbour))))
+                               (safe-println (:id occupant) "human ahead?" (= :human (:species neighbour)))
+                               (cond
+                                 ; The lab or an ape is ahead. Run!
+                                 (or lab? (= :ape (:species neighbour)))
                                  (do
-                                   (safe-println (:id occupant) "isa ape or immune human, something ahead")
-                                   {:func       rand-turn
+                                   (safe-println (:id occupant) "isa human, lab or ape ahead, prob =" direct-exp-prob)
+                                   {:func       (apply comp [u-turn
+                                                             (contaminate #(< (rand) direct-exp-prob) death-fn)
+                                                             ])
                                     :next-coord coord})
-                                 ; The way is clear, move on.
-                                 (do
-                                   (safe-println (:id occupant) "isa ape or immune human, no-one ahead")
-                                   {:func       identity
-                                    :next-coord ahead})
-                                 ))
-                      {:keys [func next-coord]} action]
-                  (safe-println (:id occupant) "func=" func)
-                  (safe-println (:id occupant) "at coord" coord "moving to" next-coord "with new state")
-                  (let [isa-human? (= :human (get-in @c [:occupant :species]))
-                        was-immune? (get-in @c [:occupant :immune?])
-                        _ (alter c func)
-                        is-immune? (get-in @c [:occupant :immune?])
-                        is-dead? (not (get-in @c [:occupant :alive?]))]
-                    (when (and isa-human? is-dead?)
-                      (alter alive-cnt dec))
-                    (when (and isa-human? (not was-immune?) is-immune?)
-                      (alter alive-cnt dec))
-                    )
-                  (safe-println (-> c deref :occupant :id) "altered to " (-> c deref :occupant))
-                  (when (not (identical? coord next-coord))
-                    (safe-println (:id occupant) "should move")
-                    (move! world coord next-coord indirect-exp-prob))
-                  (safe-println (:id occupant) "done")
-                  next-coord))))
 
-          (safe-println (:id occupant) "dead"))))))
+                                 ; A human is ahead
+                                 (and (= :human (:species neighbour)) (:alive? neighbour))
+                                 (let [prob (∪-prob (get-human-prob neighbour human-exp-prob)
+                                                    (get-airborne-prob world coord air-spreading-radius air-exp-prob)
+                                                    (get-indirect-prob world coord))]
+                                   (safe-println (:id occupant) "isa human, human ahead, prob =" prob)
+                                   {:func       (apply comp [(if (:contaminated? neighbour) u-turn rand-turn)
+                                                             (contaminate #(< (rand) prob) death-fn)
+                                                             ])
+                                    :next-coord coord})
+
+                                 ; No one alive ahead let's move
+                                 :else
+                                 (let [_ (safe-println (:id occupant) "isa human, no-one ahead")
+                                       _ (safe-println (:id occupant) "airborne-prob =" (get-airborne-prob world coord air-spreading-radius air-exp-prob))
+                                       _ (safe-println (:id occupant) "indirect-prob =" (get-indirect-prob world coord))
+                                       prob (∪-prob (get-airborne-prob world coord air-spreading-radius air-exp-prob)
+                                                    (get-indirect-prob world coord))]
+                                   (safe-println (:id occupant) "prob =" prob)
+                                   {:func       (contaminate #(< (rand) prob) death-fn)
+                                    :next-coord ahead})))
+
+                             ; Apes and immune humans just move around and never die... see TODOs
+                             (if (:alive? neighbour)
+                               ; The way is shut! Turn.
+                               (do
+                                 (safe-println (:id occupant) "isa ape or immune human, something ahead")
+                                 {:func       rand-turn
+                                  :next-coord coord})
+                               ; The way is clear, move on.
+                               (do
+                                 (safe-println (:id occupant) "isa ape or immune human, no-one ahead")
+                                 {:func       identity
+                                  :next-coord ahead})
+                               ))
+                    {:keys [func next-coord]} action]
+                (safe-println (:id occupant) "func=" func)
+                (safe-println (:id occupant) "at coord" coord "moving to" next-coord "with new state")
+                (let [isa-human? (= :human (get-in @c [:occupant :species]))
+                      was-immune? (get-in @c [:occupant :immune?])
+                      _ (alter c func)
+                      is-immune? (get-in @c [:occupant :immune?])
+                      is-dead? (not (get-in @c [:occupant :alive?]))]
+                  (when (and isa-human? is-dead?)
+                    (alter alive-cnt dec))
+                  (when (and isa-human? (not was-immune?) is-immune?)
+                    (alter alive-cnt dec))
+                  )
+                (safe-println (-> c deref :occupant :id) "altered to " (-> c deref :occupant))
+                (when (not (identical? coord next-coord))
+                  (safe-println (:id occupant) "should move")
+                  (move! world coord next-coord indirect-exp-prob))
+                (safe-println (:id occupant) "done")
+                next-coord)))
+          ;)
+          ;(dosync
+          ;; TODO tombstone?
+          ;(alter c assoc :occupant nil)
+          (safe-println (:id occupant) "dead")
+          ;)
+          )))))
 
 (defn evaporation
   [world world-size {:keys [viral-load-dec running evap-sleep-ms]}]
@@ -494,16 +498,16 @@
 
 ;;; The simulation
 
-(def world-size 10)
+(def world-size 20)
 
 ; All apes originate from the lab
-(def lab-size 3)
+(def lab-size 1)
 
 ; Number of humans to start with
 (def nhumans 40)
 
 ; Death ratio
-(def death-ratio 0.9)
+(def death-ratio 0.75) ; was 0.9
 
 ; Probability of contamination by direct exposure with an ape or the lab
 (def direct-exp-prob 0.5) ; was 1
@@ -525,7 +529,7 @@
 
 (def running (atom true))
 
-(def agent-sleep-ms 50)
+(def agent-sleep-ms 500)
 
 (def evap-sleep-ms 1000)
 
@@ -577,35 +581,39 @@
 
 (defui UiCell
        (render [this {:keys [x y occupant virus] :as cell}]
-               (ui/group
-                 :layout-x x
-                 :layout-y y
-                 :children [(ui/polygon
-                              :style-class ["cell"]
-                              :style (str "-fx-fill: rgba(255,0,0," virus ")")
-                              :points [0.0 0.0,
-                                       scale 0.0,
-                                       scale scale
-                                       0.0 scale])
-                            (ui/polygon
-                              :rotate ({0 0
-                                        1 45
-                                        2 90
-                                        3 135
-                                        4 180
-                                        5 -135
-                                        6 -90
-                                        7 -45}
-                                        (:dir occupant 0))
-                              :style-class [(name (:species occupant "")) (if (= (:species occupant) :human) (str "human-" (if (:immune? occupant) "immune" (if (:contaminated? occupant) "infected" "sane"))) "")]
-                              :points (let [r (/ scale 2)
-                                            q (/ scale 12)
-                                            y (- r q)
-                                            d (Math/sqrt (- (Math/pow r 2) (Math/pow (* y -1) 2)))]
-                                        [r (* 2 q),
-                                         d (+ r (- y q)),
-                                         (+ r d) (+ r (- y q))]))
-                            ])))
+               (let [children [(ui/polygon
+                                 :style-class ["cell"]
+                                 :style (str "-fx-fill: rgba(255,0,0," virus ")")
+                                 :points [0.0 0.0
+                                          scale 0.0
+                                          scale scale
+                                          0.0 scale])]
+                     children (if-not (and occupant (:alive? occupant))
+                                children
+                                (conj children
+                                      (ui/polygon
+                                        :rotate ({0 0
+                                                  1 45
+                                                  2 90
+                                                  3 135
+                                                  4 180
+                                                  5 -135
+                                                  6 -90
+                                                  7 -45}
+                                                  (:dir occupant 0))
+                                        :style-class [(name (:species occupant "")) (if (= (:species occupant) :human) (str "human-" (if (:immune? occupant) "immune" (if (:contaminated? occupant) "infected" "sane"))) "")]
+                                        :points (let [r (/ scale 2)
+                                                      q (/ scale 12)
+                                                      y (- r q)
+                                                      d (Math/sqrt (- (Math/pow r 2) (Math/pow (* y -1) 2)))]
+                                                  [r (* 2 q),
+                                                   d (+ r (- y q)),
+                                                   (+ r d) (+ r (- y q))]))))
+                     ]
+                 (ui/group
+                   :layout-x x
+                   :layout-y y
+                   :children children))))
 
 (defui Simulation
        (render [this {:keys [cells] :as args}]
@@ -613,7 +621,7 @@
                  :children (for [cell cells]
                              (ui-cell cell)))))
 
-(defui Stage
+(defui SimianFlu
        (render [this args]
                (ui/stage
                  :title "Simian Flu"
@@ -651,21 +659,23 @@
                                  :evap-sleep-ms  evap-sleep-ms})
 
         ;; Data State holds the business logic of our app
-        data-state nil
-        data-state (atom {:cells (for [x (range world-size) y (range world-size)]
-                                   (let [r (get-in world [x y])]
-                                     (add-watch r :world (fn [_ _ _ n]
-                                                           (swap! data-state assoc
-                                                                  (+ (* x world-size) y)
-                                                                  (assoc n :x (* x scale) :y (* y scale)))))
-                                     (assoc @r :x (* x scale) :y (* y scale))))})
+        data-state (atom nil)
+        _ (reset! data-state {:cells (into [] (for [x (range world-size) y (range world-size)]
+                                                (let [r (get-in world [x y])]
+                                                  (add-watch r :world (fn [_ _ _ n]
+                                                                        (swap! data-state assoc-in
+                                                                               [:cells (+ (* x world-size) y)]
+                                                                               (assoc n :x (* x scale) :y (* y scale)))))
+                                                  (assoc @r :x (* x scale) :y (* y scale)))))})
+        _ (println "Data =" @data-state)
+        ;_ (throw (NullPointerException.))
 
         ;; handler-fn handles events from the ui and updates the data state
         handler-fn (fn [event]
                      (try
-                       (swap! data-state handle-event event)
+                       (comment swap! data-state handle-event event)
                        (catch Throwable ex
-                         (println ex))))
+                         (safe-println ex))))
 
         ;; ui-state holds the most recent state of the ui
         ui-state   (agent (dom/app (stage @data-state) handler-fn))]
@@ -682,9 +692,10 @@
                                 (send ui-state
                                       (fn [old-ui]
                                         (try
-                                          (dom/update-app old-ui (stage @data-state))
+                                          (dom/update-app old-ui (simian-flu @data-state))
                                           (catch Throwable ex
-                                            (println ex)))))))))
+                                            (println ex)))))))
+    ))
 
 (-main)
 
