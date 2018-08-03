@@ -1,7 +1,6 @@
 (ns simian-flu.core
   (:require [clojure.math.combinatorics :refer [combinations]])
-  (:import [javafx.stage.Stage]
-           (java.io PrintWriter)))
+  (:import [javafx.stage.Stage]))
 
 ;;; TODO
 ;; [x] Implement turn and move
@@ -92,28 +91,28 @@
 ;(delta-loc 5 [0 0] 7)
 ;(delta-loc 5 [4 3] 1)
 
-(defn make-cell []
-  (ref {:lab?     false
-        :virus    0
-        :occupant nil
-        }))
-;(deref (make-cell))
+(defn make-cell [lab? occupant]
+  {:lab? lab?
+   :virus (ref (if lab? 1 0))
+   :occupant (ref occupant)})
+;(deref (:virus (make-cell)))
 
-(defn genesis
-  [world-size]
+(defn world
+  [world-size init-cell-fn]
   (let [world-range (range world-size)]
-    (mapv (fn [_]
-            (mapv (fn [_]
-                    (make-cell))
+    (mapv (fn [x]
+            (mapv (fn [y]
+                    (init-cell-fn x y ))
                   world-range))
           world-range)))
-;(world 10)
+;(defn dummy-init-cell-fn [x y] (if (= x y) '| nil))
+;(world 10 dummy-init-cell-fn)
 
 (defn cell
   [world [x y]]
   (-> world (nth x) (nth y)))
-;(-> (world 10)
-;    (cell [5 5]) deref)
+;(-> (world 10 dummy-init-cell-fn)
+;    (cell [5 5]))
 
 (defn make-ape
   [uuid dir]
@@ -126,7 +125,7 @@
 
 (defn setup-apes
   [lab-ranges]
-  (doall
+  (set
     (for [x (first lab-ranges) y (second lab-ranges)]
       [x y])))
 ;(setup-apes [[2 3] [2 3]])
@@ -155,36 +154,32 @@
       humans)))
 ;(setup-humans #(rand-int 10) #(rand-int 10) #{[2 2] [2 3] [3 3] [3 2]} 5)
 
-(defn setup!
+(defn genesis
   "Initialize apes and humans onto the 2D world."
-  [world lab-ranges nhumans]
+  [world-size lab-ranges nhumans]
   (dosync
     (let [apes (set (setup-apes lab-ranges))
-          xy-gen #(rand-int (count world))
+          xy-gen #(rand-int world-size)
           dir-gen #(rand-int 8)
           humans (setup-humans xy-gen xy-gen apes nhumans)]
-      ; Setup apes
-      (doseq [coord apes]
-        (alter (cell world coord)
-               assoc
-               :lab? true
-               :virus 1
-               :occupant (make-ape (uuid) (dir-gen))))
-      ; Setup humans
-      (doseq [coord humans]
-        (alter (cell world coord)
-               assoc
-               :lab? false
-               :virus 0
-               :occupant (make-human (uuid) (dir-gen))))
       ; Return agents for apes and humans
-      {:world  world
-       :agents (map agent (concat apes humans))})))
+      {:world  (world world-size
+                      (fn [x y]
+                        (cond
+                          (contains? apes [x y])
+                          (make-cell true (make-ape (uuid) (dir-gen)))
 
+                          (contains? humans [x y])
+                          (make-cell false (make-human (uuid) (dir-gen)))
+
+                          :else
+                          (make-cell false nil))))
+       :agents (map agent (concat apes humans))})))
 ;(let [world-size 10
 ;      lab-size 2
+;      lab-ranges (lab-ranges world-size lab-size)
 ;      nhumans 5
-;      {:keys [world agents]} (setup! world-size lab-size nhumans)]
+;      {:keys [world agents]} (genesis world-size lab-ranges nhumans)]
 ;  (map (comp #(cell world %)
 ;             deref)
 ;       agents))
@@ -196,36 +191,37 @@
   (letfn [(update-occupant [occupant]
             (safe-println (:id occupant) "turned by" amount)
             (update occupant :dir #(bound 8 (+ % amount))))]
-    #(update % :occupant update-occupant)))
-;((turn 2) {:occupant {:dir 3}})
+    update-occupant))
+;((turn 2) {:dir 3})
 ;((apply comp
 ;        [(turn 1) (turn 2)])
-;  {:occupant {:dir 1}})
+;  {:dir 1})
 
 (defn rand-turn []
   (turn (if (even? (rand-int 2)) -1 1)))
 
 (def u-turn (turn 4))
-;(u-turn {:occupant {:dir 3}})
+;(u-turn {:dir 3})
 ;((apply comp
 ;        [u-turn u-turn])
-;  {:occupant {:dir 1}})
+;  {:dir 1})
 
 (defn move!
   "Move the human or ape at coord to the direction it is heading.
   Must be called in a transaction."
-  [world coord new-coord indirect-exp-prob]
-  (let [old-c (cell world coord)
-        occupant (:occupant @old-c)
+  [world coord new-coord]
+  (let [{:keys [occupant]} (cell world coord)
         new-c (cell world new-coord)]
-    (alter old-c dissoc :occupant)
-    (alter new-c assoc :occupant occupant)
-    ; Add-up to the virus load of the cell if the last occupant was contaminated
-    (when (and (not (:lab? @old-c))
-               (:contaminated? occupant))
-      (alter old-c update :virus + indirect-exp-prob))
-    (safe-println (:id occupant) "moved from" coord "to" new-coord)
+    (ref-set (:occupant new-c) @occupant)
+    (safe-println (:id @occupant) "moved from" coord "to" new-coord)
+    (ref-set occupant nil)
     new-coord))
+;(let [world [[{:occupant (ref '|)} {:occupant (ref nil)}]]]
+;  (dosync
+;    (move! world
+;           [0 0]
+;           [0 1]))
+;  world)
 
 (defn get-human-prob
   "Return the probability of direct contamination by another human."
@@ -243,17 +239,24 @@
                        y (remove #(= y %) (range (- y radius) (+ y radius 1)))
                        :when (->> [(bound (count world) x) (bound (count world) y)]
                                   (cell world)
-                                  deref
                                   :occupant
+                                  deref
                                   :contaminated?
                                   )]
                    airborne-prob)]
     (apply ∪ (if (empty? airborne) [0] airborne))))
 ;(with-redefs-fn {#'cell (fn [_ _]
-;                          (ref {:lab? true
-;                                :virus 1
-;                                :occupant (make-ape (uuid) 7)}))}
-;  #(get-airborne-prob nil [0 0] 0 0.5))
+;                          {:lab? true
+;                           :virus (ref 1)
+;                           :occupant (ref (make-ape (uuid) 7))})}
+;  #(get-airborne-prob [[0 0 0 0 0]
+;                       [0 0 0 0 0]
+;                       [0 0 0 0 0]
+;                       [0 0 0 0 0]
+;                       [0 0 0 0 0]]
+;                      [0 0]
+;                      1
+;                      0.5))
 
 (defn get-indirect-prob
   "Return the probability of indirect contamination by examining the
@@ -261,12 +264,13 @@
   [world coord]
   (->> coord
        (cell world)
+       :virus
        deref
-       :virus))
+       ))
 ;(with-redefs-fn {#'cell (fn [_ _]
-;                          (ref {:lab? true
-;                                :virus 1
-;                                :occupant (make-ape (uuid) 7)}))}
+;                          {:lab? true
+;                           :virus (ref 0.8)
+;                           :occupant (ref (make-ape (uuid) 7))})}
 ;  #(get-indirect-prob nil [0 0]))
 
 (defn contaminate
@@ -281,20 +285,20 @@
                 (do (safe-println (:id occupant) "immunizing")
                     (assoc occupant :immune? true)))
               occupant))]
-    #(update % :occupant contaminate-occupant)))
-;((contaminate (constantly true) (constantly true)) {:occupant {:dir 2}})
-;((contaminate (constantly true) (constantly false)) {:occupant {:dir 2}})
-;((contaminate (constantly false) nil) {:occupant {:dir 2}})
-;((contaminate #(< (rand) (∪-prob 0.7 0.5)) #(< (rand) 0.8)) {:occupant {:dir 2}})
+    contaminate-occupant))
+;((contaminate (constantly true) (constantly true)) {:dir 2})
+;((contaminate (constantly true) (constantly false)) {:dir 2})
+;((contaminate (constantly false) nil) {:dir 2})
+;((contaminate #(< (rand) (∪ 0.7 0.5)) #(< (rand) 0.8)) {:dir 2})
 ;((apply comp
 ;        [(turn 1) (contaminate (constantly true) (constantly true))])
-;  {:occupant {:dir 1}})
+;  {:dir 1})
 
 (defn human-flee
   [coord {:keys [direct-exp-prob death-ratio]}]
   (let [contaminate (contaminate #(< (rand) direct-exp-prob)
                                  #(< (rand) death-ratio))]
-    {:alter-fn!   (apply comp [u-turn contaminate])
+    {:update-occupant (apply comp [u-turn contaminate])
      :next-coord coord}))
 
 (defn human-encounter
@@ -303,35 +307,36 @@
   (let [prob (∪ (get-human-prob neighbour human-exp-prob)
                 (get-airborne-prob world coord air-spreading-radius air-exp-prob)
                 (get-indirect-prob world coord))]
-    {:alter-fn!   (apply comp [(if (:contaminated? neighbour) u-turn (rand-turn))
-                               (contaminate #(< (rand) prob)
-                                            #(< (rand) death-ratio))
-                               ])
+    {:update-occupant (apply comp [(if (:contaminated? neighbour) u-turn (rand-turn))
+                                   (contaminate #(< (rand) prob)
+                                                #(< (rand) death-ratio))
+                                   ])
      :next-coord coord}))
 
 (defn human-move-on
   [world coord ahead {:keys [air-spreading-radius air-exp-prob death-ratio]}]
   (let [prob (∪ (get-airborne-prob world coord air-spreading-radius air-exp-prob)
                 (get-indirect-prob world coord))]
-    {:alter-fn!   (contaminate #(< (rand) prob)
-                               #(< (rand) death-ratio))
+    {:update-occupant (contaminate #(< (rand) prob)
+                                   #(< (rand) death-ratio))
      :next-coord ahead}))
 
 (defn ape-turn
   [coord]
-  {:alter-fn!   (rand-turn)
+  {:update-occupant (rand-turn)
    :next-coord coord})
 
 (defn ape-move-on
   [ahead]
-  {:alter-fn!   identity
+  {:update-occupant identity
    :next-coord ahead})
 
 (defn get-action
   [world coord occupant {:keys [world-size] :as config}]
   (safe-println (:id occupant) "isa" (:species occupant) "at" coord)
   (let [ahead (delta-loc world-size coord (:dir occupant))
-        {neighbour :occupant lab? :lab?} (deref (cell world ahead))]
+        {neighbour :occupant lab? :lab?} (cell world ahead)
+        neighbour @neighbour]
     (if (and (= :human (:species occupant)) (not (:immune? occupant)))
       ; Humans wander and 'try' to survive, see TODOs for possible roles
       (cond
@@ -351,13 +356,13 @@
         ; The way is clear, move on.
         (ape-move-on ahead)))))
 
-(defn at-the-edge [coord world-size]
-  (let [[x y] coord
-        limit (dec world-size)]
-    (or (= x 0)
-        (= y 0)
-        (= x limit)
-        (= y limit))))
+;(defn at-the-edge [coord world-size]
+;  (let [[x y] coord
+;        limit (dec world-size)]
+;    (or (= x 0)
+;        (= y 0)
+;        (= x limit)
+;        (= y limit))))
 
 (defn behaviour
   "Define the behaviour of apes and humans evolving in the (n*n) world.
@@ -370,12 +375,10 @@
            ]
     :as config}]
   (fn behave! [coord]
-    (let [place (cell world coord)
-          occupant (:occupant @place)
-          ]
+    (let [{:keys [lab? virus occupant]} (cell world coord)]
       (Thread/sleep agent-sleep-ms)
       ; Dead things do not behave
-      (if (:alive? occupant)
+      (if (:alive? @occupant)
         ; TODO Handle distribution here
         ;(if (at-the-edge coord world-size)
         ;  (dosync
@@ -386,12 +389,13 @@
           (when @running
             (send-off *agent* behave!))
           (dosync
-            (let [{:keys [alter-fn! next-coord]} (get-action world coord occupant config)]
+            ; Behave
+            (let [{:keys [update-occupant next-coord]} (get-action world coord @occupant config)]
               ; get some state before altering cell
               ;(let [isa-human? (= :human (get-in @place [:occupant :species]))
               ;      was-immune? (get-in @place [:occupant :immune?])]
               ; alter cell
-              (alter place alter-fn!)
+              (alter occupant update-occupant)
               ;; update counter with new state TODO use add-watch on ref cells
               ;(let [is-immune? (get-in @place [:occupant :immune?])
               ;      is-dead? (not (get-in @place [:occupant :alive?]))]
@@ -401,7 +405,10 @@
               ;    (alter alive-cnt dec))))
               ; If action led to a coord change then move!
               (when (not (identical? coord next-coord))
-                (move! world coord next-coord indirect-exp-prob))
+                (move! world coord next-coord)
+                ; Add-up to the virus load of the cell if the last occupant was contaminated
+                (when (and (not lab?) (:contaminated? (deref (:occupant (cell world next-coord)))))
+                  (commute virus + indirect-exp-prob)))
               next-coord)))
         ;)
         ;(dosync
@@ -412,7 +419,7 @@
         ))))
 
 (defn evaporation
-  [world world-size {:keys [viral-load-dec running evap-sleep-ms]}]
+  [world {:keys [world-size viral-load-dec running evap-sleep-ms]}]
   (fn evaporate! [_]
     (Thread/sleep evap-sleep-ms)
     (when @running
@@ -420,10 +427,10 @@
     (dorun
       (for [x (range world-size) y (range world-size)]
         (dosync
-          (let [c (cell world [x y])]
+          (let [{:keys [lab? virus]} (cell world [x y])]
             ; Viral load constant in the lab but decreases elsewhere
-            (when-not (:lab? @c)
-              (alter c update :virus * viral-load-dec))))))
+            (when-not lab?
+              (commute virus * viral-load-dec))))))
     nil))
 
 ;;; The simulation
@@ -464,38 +471,37 @@
 (def evap-sleep-ms 1000)
 
 ; Test simulation for 5s
-(comment let [world (genesis world-size)
-              lab-ranges (lab-ranges world-size lab-size)
-              evaporator (agent nil)
-              alive-cnt (ref nhumans)]
-         (let [{:keys [world agents]} (setup! world lab-ranges nhumans)
-               behave! (behaviour world
-                                  {:world-size           world-size
-                                   :death-ratio          death-ratio
-                                   :direct-exp-prob      direct-exp-prob
-                                   :indirect-exp-prob    indirect-exp-prob
-                                   :human-exp-prob       human-exp-prob
-                                   :air-spreading-radius air-spreading-radius
-                                   :air-exp-prob         air-exp-prob
-                                   :running              running
-                                   :agent-sleep-ms       agent-sleep-ms
-                                   :alive-cnt            alive-cnt
-                                   })
-               evaporate! (evaporation world
-                                       world-size
-                                       {:viral-load-dec viral-load-dec
-                                        :running        running
-                                        :evap-sleep-ms  evap-sleep-ms})]
-           (with-open [w (clojure.java.io/writer logfile)]
-             (.write w "Start\n"))
-           (reset! running true)
-           (dorun (map #(send-off % behave!) agents))
-           (send-off evaporator evaporate!)
-           ))
-
-(comment do
-         (reset! running false)
-         (safe-println "Stop\n"))
+;(let [lab-ranges (lab-ranges world-size lab-size)
+;      evaporator (agent nil)
+;      alive-cnt (ref nhumans)
+;      {:keys [world agents]} (genesis world-size lab-ranges nhumans)
+;      behave! (behaviour world
+;                         {:world-size           world-size
+;                          :death-ratio          death-ratio
+;                          :direct-exp-prob      direct-exp-prob
+;                          :indirect-exp-prob    indirect-exp-prob
+;                          :human-exp-prob       human-exp-prob
+;                          :air-spreading-radius air-spreading-radius
+;                          :air-exp-prob         air-exp-prob
+;                          :running              running
+;                          :agent-sleep-ms       agent-sleep-ms
+;                          :alive-cnt            alive-cnt
+;                          })
+;      evaporate! (evaporation world
+;                              {:world-size           world-size
+;                               :viral-load-dec viral-load-dec
+;                               :running        running
+;                               :evap-sleep-ms  evap-sleep-ms})]
+;  (with-open [w (clojure.java.io/writer logfile)]
+;    (.write w "Start\n"))
+;  (reset! running true)
+;  (dorun (map #(send-off % behave!) agents))
+;  (send-off evaporator evaporate!)
+;  )
+;
+;(do
+;  (reset! running false)
+;  (safe-println "Stop\n"))
 
 ; UI
 
@@ -543,7 +549,7 @@
                    :layout-y y
                    :children children))))
 
-(defui Simulation
+(defui SimulationPane
        (render [this {:keys [cells] :as args}]
                (ui/group
                  :children (for [cell cells]
@@ -558,12 +564,11 @@
                           :width (* scale world-size)
                           :height (* scale world-size)
                           :stylesheets ["ui.css"]
-                          :root (simulation args)))))
+                          :root (simulation-pane args)))))
 
-(defn -main []
-  (let [w (genesis world-size)
-        lab-ranges (lab-ranges world-size lab-size)
-        {:keys [world agents]} (setup! w lab-ranges nhumans)
+(defn simulation []
+  (let [lab-ranges (lab-ranges world-size lab-size)
+        {:keys [world agents]} (genesis world-size lab-ranges nhumans)
         evaporator (agent nil)
         alive-cnt (ref nhumans)
         behave! (behaviour world
@@ -579,22 +584,34 @@
                             :alive-cnt            alive-cnt
                             })
         evaporate! (evaporation world
-                                world-size
-                                {:viral-load-dec viral-load-dec
+                                {:world-size     world-size
+                                 :viral-load-dec viral-load-dec
                                  :running        running
                                  :evap-sleep-ms  evap-sleep-ms})
 
         ;; Data State holds the business logic of our app
         data-state (atom nil)
-        _ (reset! data-state {:cells (into [] (for [x (range world-size) y (range world-size)]
-                                                (let [r (get-in world [x y])]
-                                                  (add-watch r :world (fn [_ _ _ n]
-                                                                        (swap! data-state assoc-in
-                                                                               [:cells (+ (* x world-size) y)]
-                                                                               (assoc n :x (* x scale) :y (* y scale)))))
-                                                  (assoc @r :x (* x scale) :y (* y scale)))))})
+        _ (reset! data-state
+                  {:cells (into []
+                                (for [x (range world-size) y (range world-size)]
+                                  (let [{:keys [virus occupant]} (get-in world [x y])]
+                                    (add-watch occupant :occupant
+                                               (fn [_ _ _ n]
+                                                 (swap! data-state assoc-in
+                                                        [:cells (+ (* x world-size) y) :occupant]
+                                                        n)))
+                                    (add-watch virus :virus
+                                               (fn [_ _ _ n]
+                                                 (swap! data-state assoc-in
+                                                        [:cells (+ (* x world-size) y) :virus]
+                                                        n)))
+                                    {:x (* x scale)
+                                     :y (* y scale)
+                                     :occupant @occupant
+                                     :virus @virus
+                                     })))})
 
-        ;; handler-fn handles events from the ui and updates the data state
+        ;; handler-fn handles events from the ui and updates the data state (none ATM)
         handler-fn (fn [event]
                      (try
                        (comment swap! data-state handle-event event)
@@ -617,11 +634,19 @@
                                             (safe-println ex)))))))
     ))
 
-(do
+(defn start []
   (with-open [w (clojure.java.io/writer logfile)]
     (.write w "Start\n"))
   (reset! running true)
-  (-main)
-  (Thread/sleep 30000)
+  (simulation)
+  nil)
+
+(defn stop []
   (reset! running false)
   (safe-println "Stop\n"))
+
+(comment
+  ; For REPL
+  (start)
+  (stop)
+  )
