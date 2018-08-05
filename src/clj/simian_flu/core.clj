@@ -157,24 +157,23 @@
 (defn genesis
   "Initialize apes and humans onto the 2D world."
   [world-size lab-ranges nhumans]
-  (dosync
-    (let [apes (set (setup-apes lab-ranges))
-          xy-gen #(rand-int world-size)
-          dir-gen #(rand-int 8)
-          humans (setup-humans xy-gen xy-gen apes nhumans)]
-      ; Return agents for apes and humans
-      {:world  (world world-size
-                      (fn [x y]
-                        (cond
-                          (contains? apes [x y])
-                          (make-cell true (make-ape (uuid) (dir-gen)))
+  (let [apes (set (setup-apes lab-ranges))
+        xy-gen #(rand-int world-size)
+        dir-gen #(rand-int 8)
+        humans (setup-humans xy-gen xy-gen apes nhumans)]
+    ; Return agents for apes and humans
+    {:world  (world world-size
+                    (fn [x y]
+                      (cond
+                        (contains? apes [x y])
+                        (make-cell true (make-ape (uuid) (dir-gen)))
 
-                          (contains? humans [x y])
-                          (make-cell false (make-human (uuid) (dir-gen)))
+                        (contains? humans [x y])
+                        (make-cell false (make-human (uuid) (dir-gen)))
 
-                          :else
-                          (make-cell false nil))))
-       :agents (map agent (concat apes humans))})))
+                        :else
+                        (make-cell false nil))))
+     :agents (map agent (concat apes humans))}))
 ;(let [world-size 10
 ;      lab-size 2
 ;      lab-ranges (lab-ranges world-size lab-size)
