@@ -1,5 +1,6 @@
 (ns simian-flu.core
-  (:require [clojure.math.combinatorics :refer [combinations]])
+  (:require [clojure.math.combinatorics :refer [combinations]]
+            [eclojure :as io])
   (:import [javafx.stage.Stage]))
 
 ;;; TODO
@@ -355,19 +356,20 @@
         ; The way is clear, move on.
         (ape-move-on ahead)))))
 
-;(defn at-the-edge [coord world-size]
-;  (let [[x y] coord
-;        limit (dec world-size)]
-;    (or (= x 0)
-;        (= y 0)
-;        (= x limit)
-;        (= y limit))))
+(defn at-the-edge [coord world-size]
+  (let [[x y] coord
+        limit (dec world-size)]
+    (or (= x 0)
+        (= y 0)
+        (= x limit)
+        (= y limit))))
 
 (defn behaviour
   "Define the behaviour of apes and humans evolving in the (n*n) world.
   Returns a function that will apply the defined behavior to an ape or human agent."
   [world
-   {:keys [indirect-exp-prob
+   {:keys [world-size
+           indirect-exp-prob
            running
            agent-sleep-ms
            ;alive-cnt
@@ -379,42 +381,43 @@
       ; Dead things do not behave
       (if (:alive? @occupant)
         ; TODO Handle distribution here
-        ;(if (at-the-edge coord world-size)
-        ;  (dosync
-        ;    (safe-println (:id occupant) (if (= :human (:species occupant)) "human" "ape") "at the edge, farewell")
-        ;    (when (= :human (:species occupant))
-        ;      (alter alive-cnt dec)))
-        (do
-          (when @running
-            (send-off *agent* behave!))
-          (dosync
-            ; Behave
-            (let [{:keys [update-occupant next-coord]} (get-action world coord @occupant config)]
-              ; get some state before altering cell
-              ;(let [isa-human? (= :human (get-in @place [:occupant :species]))
-              ;      was-immune? (get-in @place [:occupant :immune?])]
-              ; alter cell
-              (alter occupant update-occupant)
-              ;; update counter with new state TODO use add-watch on ref cells
-              ;(let [is-immune? (get-in @place [:occupant :immune?])
-              ;      is-dead? (not (get-in @place [:occupant :alive?]))]
-              ;  (when (and isa-human? is-dead?)
-              ;    (alter alive-cnt dec)) ;TODO commute
-              ;  (when (and isa-human? (not was-immune?) is-immune?)
-              ;    (alter alive-cnt dec))))
-              ; If action led to a coord change then move!
-              (when (not (identical? coord next-coord))
-                (move! world coord next-coord)
-                ; Add-up to the virus load of the cell if the last occupant was contaminated
-                (when (and (not lab?) (:contaminated? (deref (:occupant (cell world next-coord)))))
-                  (commute virus + indirect-exp-prob)))
-              next-coord)))
-        ;)
-        ;(dosync
-        ;; TODO tombstone?
-        ;(alter place assoc :occupant nil)
-        (safe-println (:id occupant) "dead")
-        ;)
+        (if (at-the-edge coord world-size)
+          (io/dosync
+            (safe-println (:id occupant) (if (= :human (:species occupant)) "human" "ape") "at the edge, farewell")
+            ;(comment when (= :human (:species occupant))
+            ;  (alter alive-cnt dec))
+            )
+          (do
+            (when @running
+              (send-off *agent* behave!))
+            (dosync
+              ; Behave
+              (let [{:keys [update-occupant next-coord]} (get-action world coord @occupant config)]
+                ; get some state before altering cell
+                ;(let [isa-human? (= :human (get-in @place [:occupant :species]))
+                ;      was-immune? (get-in @place [:occupant :immune?])]
+                ; alter cell
+                (alter occupant update-occupant)
+                ;; update counter with new state TODO use add-watch on ref cells
+                ;(let [is-immune? (get-in @place [:occupant :immune?])
+                ;      is-dead? (not (get-in @place [:occupant :alive?]))]
+                ;  (when (and isa-human? is-dead?)
+                ;    (alter alive-cnt dec)) ;TODO commute
+                ;  (when (and isa-human? (not was-immune?) is-immune?)
+                ;    (alter alive-cnt dec))))
+                ; If action led to a coord change then move!
+                (when (not (identical? coord next-coord))
+                  (move! world coord next-coord)
+                  ; Add-up to the virus load of the cell if the last occupant was contaminated
+                  (when (and (not lab?) (:contaminated? (deref (:occupant (cell world next-coord)))))
+                    (commute virus + indirect-exp-prob)))
+                next-coord)))
+          ;)
+          ;(dosync
+          ;; TODO tombstone?
+          ;(alter place assoc :occupant nil)
+          (safe-println (:id occupant) "dead")
+          )
         ))))
 
 (defn evaporation
@@ -646,8 +649,36 @@
                          (safe-println ex))))
 
         ;; ui-state holds the most recent state of the ui
-        ui-state   (agent (dom/app (simian-flu @data-state) handler-fn))]
+        ui-state   (agent (dom/app (simian-flu @data-state) handler-fn))
+        server nil]
 
+    (listen server :on-prepare
+            (fn [coordinator ballot {:keys [coord new-occupant]}]
+              (io/dosync
+                ;reject dtx on abort
+                (io/on-abort
+                  (send-off acceptor reject! coordinator coord))
+                ;make sure only terminate causes abort so above event can be executed only once
+                (io/or-else-all
+                  #(let [{:keys [lab? virus occupant] :as c} (cell world coord)
+                         occupant (ensure occupant)]           ;take read lock or abort
+                     (if occupant
+                       (send-off acceptor reject! coordinator coord)
+                       (do
+                         (alter proposed assoc coord new-occupant)
+                         (send-off acceptor accept! coordinator coord)
+
+                         ;TODO move code below into :on-commit
+                         (ref-set (:occupant c) new-occupant)
+                         ; Add-up to the virus load of the cell if the last occupant was contaminated
+                         (when (and (not lab?) (:contaminated? occupant))
+                           (commute virus + indirect-exp-prob)))
+                       ))
+                  ;terminate and run on-abort event if occupant cannot not be placed
+                  #(io/terminate)
+                  ))))
+    (listen server :on-commit
+            (fn [coordinator {:keys []}]))
     (dorun (map #(send-off % behave!) agents))
     (send-off evaporator evaporate!)
     (send-off ui-throttler ui-throttle)
