@@ -1,0 +1,56 @@
+{:paths    ["src/clj"]
+ :deps     {org.clojure/clojure            {:mvn/version "1.10.1"}
+            org.clojure/math.combinatorics {:mvn/version "0.1.4"}
+            cljfx                          {:mvn/version "1.7.4"}
+            cljfx/css                      {:mvn/version "1.1.0"}
+            }
+ :jvm-opts ["-Dguardrails.enabled"]
+ :aliases  {;; development and debugging tools:
+            :dev    {:extra-paths ["dev"]
+                     :extra-deps  {org.clojure/test.check      {:mvn/version "RELEASE"}
+                                   org.clojure/tools.namespace {:mvn/version "RELEASE"}
+                                   }
+                     }
+            ;; testing and debugging tools:
+            :test   {:extra-paths ["test/clj"]
+                     :extra-deps  {org.clojure/test.check {:mvn/version "RELEASE"}}
+                     }
+            ;; - see https://github.com/weavejester/eftest
+            ;; - makes for a great feedback loop when coupled with an IntelliJ Cursive "External Tool" to run all tests
+            :eftest {:extra-deps {eftest {:mvn/version "RELEASE"}}
+                     ;- (quote "Kinda gross but functional. ¯\_(ツ)_/¯")
+                     ;- Source https://github.com/weavejester/eftest/pull/51#issuecomment-408708685
+                     :main-opts  ["-e" "(require,'[eftest.runner,:refer,[find-tests,run-tests]]),(run-tests,(find-tests,\".\"))"]
+                     }
+            ;; - see https://github.com/cognitect-labs/test-runner
+            ;; - run your tests: clj -A:test:runner
+            :runner {:extra-deps {com.cognitect/test-runner
+                                  {:git/url "https://github.com/cognitect-labs/test-runner"
+                                   :sha     "f7ef16dc3b8332b0d77bc0274578ad5270fbfedd"}}
+                     :main-opts  ["-m" "cognitect.test-runner"
+                                  "-d" "src/clj"
+                                  "-d" "test/clj"
+                                  "-r" ".*"]}     ;; - see https://github.com/hugoduncan/criterium/
+            ;; - see https://github.com/cognitect-labs/REBL-distro
+            ;; - (assumes you have REBL as /opt/REBL/latest/REBL.jar
+            :rebl   {:extra-deps {org.clojure/core.async      {:mvn/version "0.6.532"}
+                                  ;; deps for file datafication (0.9.149 or later)
+                                  org.clojure/data.csv        {:mvn/version "0.1.4"}
+                                  org.clojure/data.json       {:mvn/version "0.2.7"}
+                                  org.yaml/snakeyaml          {:mvn/version "1.25"}
+                                  com.cognitect/rebl
+                                  ;; adjust to match your install location
+                                                              {:local/root "/opt/REBL/latest/REBL.jar"}
+                                  org.openjfx/javafx-fxml     {:mvn/version "11.0.2"}
+                                  org.openjfx/javafx-controls {:mvn/version "11.0.2"}
+                                  org.openjfx/javafx-graphics {:mvn/version "11.0.2"}
+                                  org.openjfx/javafx-media    {:mvn/version "11.0.2"}
+                                  org.openjfx/javafx-swing    {:mvn/version "11.0.2"}
+                                  org.openjfx/javafx-base     {:mvn/version "11.0.2"}
+                                  org.openjfx/javafx-web      {:mvn/version "11.0.2"}}
+                     ;; this ensures we have a DynamicClassLoader, which is needed for
+                     ;; add-lib to work, if we're starting other processes via aliases
+                     ;; such as a socket REPL or Cognitect's REBL etc
+                     :main-opts  ["-e" "(->>(Thread/currentThread)(.getContextClassLoader)(clojure.lang.DynamicClassLoader.)(.setContextClassLoader,(Thread/currentThread)))"
+                                  "-m" "cognitect.rebl"]}
+            }}

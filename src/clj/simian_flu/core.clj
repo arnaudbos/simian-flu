@@ -1,5 +1,6 @@
 (ns simian-flu.core
-  (:require [clojure.math.combinatorics :refer [combinations]])
+  (:require [clojure.math.combinatorics :refer [combinations]]
+            [simian-flu.ui :as ui])
   (:import [java.util UUID]))
 
 ;;; TODO
@@ -10,7 +11,7 @@
 ;; [x] Implement evap agent
 ;; [x] Implement human/ape behavior in dosync
 ;; [x] Implement instant death
-;; [/] Add JavaFX GUI, see: https://github.com/halgari/fn-fx
+;; [x] Add JavaFX GUI (https://github.com/cljfx/cljfx)
 ;; [/] Keep counter of living humans and stop simulation when all humans are dead
 ;; [ ] Define viral load decrease with rate (per-cycle) for non-dying humans
 ;; [ ] Implement slow death instead of instant death
@@ -213,14 +214,16 @@
                    :else
                    (make-cell false nil))))
      :agents (map agent (concat apes humans))}))
-(let [world-size 10
-      lab-size   2
-      lab-ranges (lab-ranges world-size lab-size)
-      nhumans    5
-      {:keys [world agents]} (genesis world-size lab-ranges nhumans)]
-  (map (comp #(cell world %)
-         deref)
-    agents))
+(comment
+  (let [world-size 10
+        lab-size   2
+        lab-ranges (lab-ranges world-size lab-size)
+        nhumans    5
+        {:keys [world agents]} (genesis world-size lab-ranges nhumans)]
+    (map (comp #(cell world %)
+           deref)
+      agents))
+  )
 
 (defn turn
   "Returns the function that must be applied to a cell's value to turn its
@@ -485,10 +488,10 @@
 
 ;;; The simulation
 
-(def world-size 30)
+(def world-size 50)
 
 ; All apes originate from the lab
-(def lab-size 1)
+(def lab-size 2)
 
 ; Number of humans to start with
 (def nhumans 200)
@@ -516,7 +519,7 @@
 
 (def running (atom true))
 
-(def agent-sleep-ms 150)
+(def agent-sleep-ms 200)
 
 (def evap-sleep-ms 500)
 
@@ -553,80 +556,9 @@
 ;  (reset! running false)
 ;  (safe-println "Stop\n"))
 
-; UI
-
-(require
-  '[fn-fx.fx-dom :as dom]
-  '[fn-fx.diff :refer [component defui render should-update?]]
-  '[fn-fx.controls :as ui])
-
-(def ui-throttle-ms 1000)
+(def ui-throttle-ms 100)
 
 (def ui-throttle-cnt 1)
-
-(def cell-points
-  (memoize
-    (fn [scale] [0.0 0.0
-                 scale 0.0
-                 scale scale
-                 0.0 scale])))
-
-(def marker
-  (memoize
-    (fn [scale]
-      (let [r (/ scale 2)
-            q (/ scale 12)
-            y (- r q)
-            d (Math/sqrt (- (Math/pow r 2) (Math/pow (* y -1) 2)))]
-        [r (* 2 q),
-         d (+ r (- y q)),
-         (+ r d) (+ r (- y q))]))))
-
-(def angles {0 0
-             1 45
-             2 90
-             3 135
-             4 180
-             5 -135
-             6 -90
-             7 -45})
-
-(defui UiCell
-  (render [this {:keys [cell scale] :as state}]
-    (let [{:keys [x y occupant virus]} cell
-          children [(ui/polygon
-                      :style-class ["cell"]
-                      :style (str "-fx-fill: rgba(255,0,0," virus ")")
-                      :points (cell-points scale))]
-          children (if-not (and occupant (:alive? occupant))
-                     children
-                     (conj children
-                       (ui/polygon
-                         :rotate (angles (:dir occupant 0))
-                         :style-class [(name (:species occupant "")) (if (= (:species occupant) :human) (str "human-" (if (:immune? occupant) "immune" (if (:contaminated? occupant) "infected" "sane"))) "")]
-                         :points (marker scale))))]
-
-      (ui/group
-        :layout-x x
-        :layout-y y
-        :children children))))
-
-(defui SimulationPane
-  (render [this {:keys [cells scale] :as state}]
-    (ui/group
-      :children (for [cell cells]
-                  (ui-cell {:cell cell :scale scale})))))
-
-(defui SimianFlu
-  (render [this {:keys [width height] :as state}]
-    (ui/stage
-      :title "Simian Flu"
-      :shown true
-      :scene (ui/scene
-               :width width
-               :height height
-               :stylesheets ["ui.css"]
-               :root (simulation-pane state)))))
 
 (defn ui-throttle
   [_]
@@ -662,58 +594,45 @@
 
         ;; Data State holds the business logic of our app
 
-        width        800
-        height       600
+        width        (* 15 world-size)
+        height       (* 15 world-size)
         scale        (double (/ (min width height) world-size))
-        data-state   (atom {:width  width
+        state-proxy  (atom {:width  width
                             :height height
-                            :scale  scale})
-
-        _            (swap! data-state assoc :cells
-                       (into []
-                         (for [x (range world-size) y (range world-size)]
-                           (let [{:keys [virus occupant]} (get-in world [x y])]
-                             (add-watch occupant :occupant
-                               (fn [_ _ _ n]
-                                 (swap! data-state assoc-in
-                                   [:cells (+ (* x world-size) y) :occupant]
-                                   n)))
-                             (add-watch virus :virus
-                               (fn [_ _ _ n]
-                                 (swap! data-state assoc-in
-                                   [:cells (+ (* x world-size) y) :virus]
-                                   n)))
-                             {:x        (* x scale)
-                              :y        (* y scale)
-                              :occupant @occupant
-                              :virus    @virus}))))
-
-
-        ;; handler-fn handles events from the ui and updates the data state (none ATM)
-        handler-fn   (fn [event]
-                       (try
-                         (comment swap! data-state handle-event event)
-                         (catch Throwable ex
-                           (safe-println ex))))
-
-        ;; ui-state holds the most recent state of the ui
-        ;ui-state   (agent (dom/app (simian-flu @data-state) handler-fn))
+                            :scale  scale
+                            :cells  (into []
+                                      (for [x (range world-size) y (range world-size)]
+                                        (let [{:keys [virus occupant]} (get-in world [x y])]
+                                          {:x        (* x scale)
+                                           :y        (* y scale)
+                                           :occupant @occupant
+                                           :virus    @virus})))})
+        data-state   (atom @state-proxy)
         ]
-
-    (dorun (map #(send-off % behave!) agents))
-    (send-off evaporator evaporate!)
-    ;(send-off ui-throttler ui-throttle)
+    ;; funnel cell states to the proxy state
+    (doall
+      (for [x (range world-size) y (range world-size)]
+        (let [{:keys [virus occupant]} (get-in world [x y])]
+          (add-watch occupant :occupant
+            (fn [_ _ _ n]
+              (swap! state-proxy assoc-in
+                [:cells (+ (* x world-size) y) :occupant]
+                n)))
+          (add-watch virus :virus
+            (fn [_ _ _ n]
+              (swap! state-proxy assoc-in
+                [:cells (+ (* x world-size) y) :virus]
+                n))))))
 
     ;; Every time the data-state changes, queue up an update of the UI
-    #_(add-watch data-state :ui (fn [_ _ _ _]
-                                  (when (= 0 ui-throttle-cnt)
-                                    (send ui-state
-                                      (fn [old-ui]
-                                        (try
-                                          (dom/update-app old-ui (simian-flu @data-state))
-                                          (catch Throwable ex
-                                            (safe-println ex)))))
-                                    (alter-var-root #'ui-throttle-cnt (constantly 1))))))
+    (add-watch state-proxy :ui (fn [_ _ _ state]
+                                 (when (= 0 ui-throttle-cnt)
+                                   (reset! data-state state)
+                                   (alter-var-root #'ui-throttle-cnt (constantly 1)))))
+    (ui/show data-state)
+    (dorun (map #(send-off % behave!) agents))
+    (send-off evaporator evaporate!)
+    (send-off ui-throttler ui-throttle))
   )
 
 
@@ -721,6 +640,7 @@
   (with-open [w (clojure.java.io/writer logfile)]
     (.write w "Start\n"))
   (reset! running true)
+  (Thread/sleep 5)
   (simulation)
   nil)
 
